@@ -1,0 +1,32 @@
+=== ROUND 2 PRE-STATE Thu Jul 23 16:34:46 CDT 2026 ===
+--- target packages enabled status (before) ---
+com.google.android.tv.assistant               enabled
+disabled
+com.sony.dtv.assistantadapter                 enabled
+disabled
+com.sony.dtv.voicerecognitionconfirmation     enabled
+disabled
+com.google.android.katniss                    enabled
+disabled
+com.google.android.tvrecommendations          enabled
+disabled
+com.google.android.apps.mediashell            enabled
+disabled
+com.sonyericsson.dlna                         enabled
+disabled
+com.sony.huey.dlna.module                     enabled
+disabled
+com.sony.huey.dlna.renderersettings           enabled
+disabled
+com.vewd.core.service                         enabled
+disabled
+com.google.android.play.games                 enabled
+disabled
+com.google.android.videos                     enabled
+disabled
+--- animation scales (before) ---
+window_animation_scale=1.0
+transition_animation_scale=1.0
+animator_duration_scale=1.0
+--- free space (before) ---
+/dev/block/mmcblk0p48   6577704 4679260   1750988  73% /data

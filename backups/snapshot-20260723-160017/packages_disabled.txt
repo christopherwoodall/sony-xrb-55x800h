@@ -1,0 +1,5 @@
+package:com.sony.dtv.promos
+package:com.sony.dtv.b2b.rs232csupport
+package:com.sony.dtv.b2b.vendorprotocol
+package:com.sony.dtv.b2b.softap
+package:screnmirroring.com

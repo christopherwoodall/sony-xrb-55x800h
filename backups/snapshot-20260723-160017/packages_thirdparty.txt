@@ -1,0 +1,17 @@
+package:com.peacocktv.peacockandroid
+package:com.pbs.video
+package:com.spotify.tv.android
+package:com.bamnetworks.mobile.android.gameday.atbat
+package:com.espn.score_center
+package:com.google.android.tv
+package:com.hulu.livingroomplus
+package:com.wbd.stream
+package:tv.twitch.android.app
+package:dw.com.androidtv.live
+package:de.tagesschau
+package:com.tubitv
+package:tv.pluto.android
+package:com.accuweather.android
+package:com.cbs.ott
+package:com.disney.disneyplus
+package:com.foxsports.android
