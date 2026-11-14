@@ -561,3 +561,104 @@ nginx :80 (root, uid 2900)
   - Admin password (keystore)
   - Node runtime (auto-start)
   - Debloat changes (pm disable persists)
+
+---
+
+# Round 17 (2026-11-14): ZIP-SLIP ARBITRARY FILE WRITE — CONFIRMED
+
+## The vulnerability (CWE-22: Path Traversal)
+
+**`ZipUtil.inflate()` in `com.sony.dtv.b2b.importexport` does not validate
+individual zip ENTRY names.** Only the top-level zip path and output directory
+are checked (`FileUtil.checkDirectoryTraversal()` checks `starts with /` and
+`no ../ substring` on those two arguments only).
+
+```java
+// The vulnerable extraction loop:
+ZipEntry entry = entries.nextElement();
+File file3 = new File(outputDir, entry.getName());  // ← NO VALIDATION of entry.getName()
+```
+
+## Attack chain (verified end-to-end)
+
+```
+1. POST /sony/webui/api/import (digest auth: admin/<password>)
+   └─ multer saves uploaded zip to .tmp/import.zip (uid 10033)
+2. Bridge: settings.importFromFile({file: .tmp/import.zip})
+   └─ RemoteImportExportService.importFile() (uid 1000)
+3. ImportRemoteActivity starts on the TV screen
+   └─ ZipUtil.inflate(zipPath, externalCacheDir + "/RemoteImportTemp")
+4. EXTRACTION: new File(outputDir, "../../../../../ZIPSLIP_SD_CARD.txt")
+   └─ Path traversal: 5x ../ escapes the extraction directory
+   └─ WRITE: /storage/emulated/0/ZIPSLIP_SD_CARD.txt  ← CONFIRMED ON DEVICE
+5. ImportService then validates the zip (FormatError = code 4)
+   └─ But the write ALREADY HAPPENED (extraction precedes validation)
+```
+
+## Proof of concept
+
+- **Entry name**: `../../../../../ZIPSLIP_SD_CARD.txt`
+- **Result on device**: `-rw-rw---- 1 root sdcard_rw 70 /sdcard/ZIPSLIP_SD_CARD.txt`
+- **Content verified**: "ZIP-SLIP CONFIRMED: written to shared storage root
+  via path traversal"
+- **Marker cleaned up** after verification.
+
+## Path resolution boundaries (tested)
+
+| Target | `../` count | Result |
+|--------|------------|--------|
+| `/sdcard/` (FUSE root) | 5 | **WRITE SUCCEEDED** |
+| `/data/local/tmp/` | 9 | EACCES (root:shell 0771, uid 1000 not in group) |
+| `/data/system/` | 9 | EACCES (SELinux: importexport domain cannot write system_data_file) |
+| Above FUSE root | 6 | Failed (FUSE mount blocks upward writes) |
+| Other app's data dir | 3 | Failed (Android 10 scoped storage) |
+
+**Key insight**: The 9-level traversal DOES resolve through the FUSE mount to
+the real filesystem (the EACCES error proves the path resolved — it's a
+permission denial, not ENOENT). SELinux, not the path traversal, is the
+remaining barrier to system-path writes.
+
+## Root-log trick (documented)
+
+The webui's node.js `console.log` output appears in logcat with tag `node.js`.
+The importexport Java code logs with tags `ImportRemoteActivity`, `ZipUtil`,
+`RemoteImportExportService`. This gives us full visibility into the import
+chain without needing shell access to the app's private directories:
+
+```
+adb shell "logcat -d | grep -E 'node\.js|ZipUtil|ImportRemote'"
+```
+
+## Dependency audit (webui node_modules)
+
+| Package | Version | Known CVEs |
+|---------|---------|-----------|
+| multer | 1.4.2 | EOL branch; busboy parsing issues |
+| express | 4.17.1 | CVE-2024-29041, CVE-2024-43796 |
+| body-parser | 1.19.0 | CVE-2024-45590 (DoS) |
+| node-serialize | NOT PRESENT | — (no deserialization RCE) |
+
+Node.js runtime: v20.11.1 (armeabi-v7a, 32-bit). Release-day CVEs patched in
+that version; ~50 CVEs behind from the 2025-2026 cycle. No ExploitDB entries
+for the runtime itself.
+
+## Settings service crash root cause (SOLVED)
+
+The `settings/*` bridge methods crashed because:
+1. `HotelMode.getCurrentHotelMode()` reads
+   `content://com.sony.dtv.b2b.hotelsettings/hotel` key `hotel_mode`
+2. `com.sony.dtv.b2b.hotelmode` was disabled (our July debloat)
+3. Provider returned null → `switch(null)` → NullPointerException
+4. Fix: `pm enable --user 0 com.sony.dtv.b2b.hotelmode` + reboot
+5. After reboot + one successful import: `settings/getProMode` returns
+   `{"mode":"normal","mtkMode":0,"mtkCurrentMode":0,"code":0}` ✓
+
+## Import result codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | SUCCESS |
+| 1 | ERROR (generic) |
+| 2 | SCREEN_STATE_ERROR |
+| 3 | INVALID_MODEL_VARIATION |
+| 4 | INVALID_FILE (our test zips) |
