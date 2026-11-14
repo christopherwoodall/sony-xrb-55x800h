@@ -505,3 +505,57 @@ nginx :80 (root, uid 2900)
   but the auth service stops responding → webui returns to error?code=1).
 - Full removal: factory reset the B2B admin password data via
   `pm clear com.sony.dtv.b2b.adminpassword`.
+
+---
+
+# Round 16 (2026-11-14): nginx DoS + bridge service mapping
+
+## What happened
+- Tested `system/setWebApiForwarding` with external + `file://` URIs.
+- All accepted (`{"result":{}}`) — **but the `file://` rule killed nginx.**
+- nginx cannot be restarted without a reboot:
+  - `setprop vendor.svp.reverseproxy.enable 1` → SELinux-denied from shell
+  - ProSettingsService `setSystemProperty()` → `UnsupportedOperationException:
+    SystemPropertiesSet() is not supported on this OS` (firmware-gated)
+  - `WebApiCoreService` requires `BIND_WEBAPI_CORE_SERVICE` (signature)
+  - `pm disable` of webapi.core → blocked for shell (signature-protected package)
+
+## Findings (Round 16)
+1. **nginx DoS via setWebApiForwarding**: the webui's bridge method accepts
+   arbitrary `file://` URIs in forwarding rules; the resulting nginx config
+   kills the process. Unrecoverable without reboot. (CWE-20: improper input
+   validation on a privileged bridge method.)
+2. **setWebApiForwarding accepts external hosts** — potential SSRF/proxy
+   primitive (accepted `http://10.0.0.14:9999/` but untested for actual
+   forwarding since nginx died before we could verify).
+3. **Bridge service map (verified live)**:
+   - `system/getSystemInformation` — full device dossier
+   - `system/hasAdminPassword` — gate check
+   - `system/generateWebApiAuthToken` — token minting (unlimited)
+   - `system/getIpControlAuthentication` — `{"auth":0,"psk":""}` (IP control off)
+   - `system/setWebApiForwarding` — nginx forwarding rules (DANGEROUS)
+   - `android/getAndroidPackages` — full package list
+   - `settings/*` — **ALL CRASH the webui** (bind to importexport fails)
+4. **Settings service crash root cause**: `settings/*` methods bind to
+   `com.sony.dtv.b2b.importexport/RemoteImportExportService`. Even with
+   importexport enabled, the bind crashes NodeProcessService0 with
+   `FATAL EXCEPTION: Thread-2`.
+5. **setSystemProperty on ProSettingsService**: implemented but throws
+   `UnsupportedOperationException` on this firmware variant (B2B-gated).
+   The method exists in the AIDL (TRANSACTION 25) but is firmware-disabled.
+
+## Current state (after nginx DoS)
+- **webui (port 20338): ALIVE** — accessible via adb forward tcp:18081
+- **nginx (port 80): DEAD** — no native Sony API endpoint
+- **Bridge services: WORKING** (system, android — via webui's proxy)
+- **JSON-RPC proxy: WORKING** (via webui's /api/webapi/:path)
+- **IRCC: WORKING** (via webui's /api/ircc)
+- **GraphQL: NOT WORKING** (body-parser issue in the webui)
+- **Admin password: `1234abcd`** (removal deferred)
+
+## Recovery path
+- Reboot the TV to restore nginx. All changes persist:
+  - BPK-installed webui (permanent)
+  - Admin password (keystore)
+  - Node runtime (auto-start)
+  - Debloat changes (pm disable persists)
