@@ -200,12 +200,14 @@ com.sony.dtv.remotecontrolsettings, com.sony.dtv.timers, com.sony.dtv.servicemod
   port for this platform. Root would add: purging persistent packages (airplayapp), hosts
   -file blocking. Judged not worth the brick risk on a working set.
 
-## Firmware note
+## Firmware note (corrected 2026-11-13)
 
-- TV runs S97 (incremental 662301, 2020); Sony published v6.6230 for NA on 2026-04-28.
-- An OTA will likely re-enable/restore Sony packages and patch ADB — after any update,
-  re-run the Round 3/4 disable lists (and re-verify the crash-loop fix holds).
-- AdGuard Private DNS (dns.adguard-dns.com) is still active from round 1.
+- The running build IS the v6.6230-era firmware: SPL 2026-02-01, kernel 4.19.75 built
+  2026-04-08, already present in the July snapshot (initial "2020 build" reading was
+  wrong — the S97 suffix is Sony's numbering, not a date). Future OTAs (v6.7+) will
+  likely re-enable/restore Sony packages and may close ADB — re-run the disable lists
+  after any update, and re-verify the crash-loop fix.
+- AdGuard Private DNS (dns.adguard-dns.com) was disabled on 2026-11-13 (round 5).
 
 ## ADB state at end of round 3/4
 
@@ -374,3 +376,43 @@ No badly-permissioned app hands out system uid tonight. No setuid to "copy over"
 verity + SELinux + signature gates hold. The audit artifacts and parser tooling are
 preserved in `~/sony-xrb-55x800h-analysis/` for a follow-up session (decompile the
 leads above with jadx when tooling allows).
+
+---
+
+# Round 8 (2026-11-13): local artifact cache + kernel evidence (pre-CVE hunt)
+
+**Operator request:** cache Sony files locally (gitignored, kept for analysis),
+grab drivers, get docs straight, then LinPEAS-style kernel CVE work.
+
+## Cache (local-only: `~/sony-xrb-55x800h-analysis/`, 2.1GB, hashes in MANIFEST.sha256)
+
+- `device-fs/` mirrors the readable TV filesystem: 115 Sony/MTK APKs (~1GB),
+  18 kernel modules (/vendor/lib/modules), partial /vendor/bin (SELinux denies shell
+  on all /vendor/bin/hw/* root daemons — uncachable without root), 66 init .rc files
+  (complete service/uid/SELinux-context map).
+- `device-fs/vendor-bridged-apks/` — the 22 /vendor APKs adbd couldn't read
+  (shell-cat bridge through /sdcard; same bridge pulled the / root dtv_driver.ko).
+- `modules/` — /vendor/lib/modules + / root dtv_driver.ko (24MB), dtv_dolby_vision.ko.
+- `kernel/` — full /proc/config.gz (4.19.75), lsmod, full getprop, sysctls
+  (dmesg_restrict/kptr_restrict deny reads as expected), /proc/driver/sony_pqctrl
+  listing, world-writable module-parameter scan (none found).
+- The loaded `sony_pqctrl` (1.4MB), `sony_aqctrl`, `sony_bootlockctrl` modules have NO
+  .ko anywhere reachable — loaded from outside Android's view; live interfaces at
+  /sys/module/* and /proc/driver/sony_pqctrl.
+- Repo .gitignore extended (*.apk/*.ko/*.dex/device-fs/… ) so nothing proprietary can
+  be committed; the cache lives OUTSIDE the repo.
+
+## Firmware correction
+
+- The TV has been on the v6.6230-era build all along (SPL 2026-02-01, kernel built
+  2026-04-08 — identical in the July snapshot). "S97" is Sony's supplemental build
+  number, not a 2020 date. Future-OTA guidance now refers to v6.7+ (unreleased).
+
+## Kernel CVE-hunt starting facts (LinPEAS-style)
+
+- 4.19.75 SMP PREEMPT armv8l, built 2026-04-08 — sublevel says ~Sep-2019 upstream but
+  Sony backports into their own base, so SUBLEVEL ≠ patch status; SPL 2026-02-01 is the
+  vendor claim to test against.
+- dmesg (klogctl) and /proc/kallsyms denied to shell; no world-writable module params.
+- Full kernel config cached — triage of risky/hardening options happens against
+  `kernel/config-4.19.75`.

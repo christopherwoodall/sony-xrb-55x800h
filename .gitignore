@@ -1,0 +1,15 @@
+# Local-only analysis artifacts — never commit proprietary/cached device files
+*.apk
+*.dex
+*.ko
+*.tar
+device-fs/
+sony_apks.tar
+vendor_core.tar
+analysis/
+sony-xrb-55x800h-analysis/
+
+# Tooling output that may embed device-unique data
+*.odex
+*.vdex
+*.art
