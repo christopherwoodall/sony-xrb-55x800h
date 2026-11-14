@@ -395,7 +395,7 @@ was build-stripped (`PACKED_PUBKEY = new int[0]`).
 interfaces extracted per-device, not redistributed). Results:
 - bind OK from an adb-installed untrusted app (pm grant WRITE_SECURE_SETTINGS)
 - wifi configs disclosed (SSIDs/WPA/MACs; PSKs masked by toString)
-- IpControlPSK empty; deviceId B0:00:08:F0:4F:C5; SW PKG6.6230.0725NAA
+- IpControlPSK empty; deviceId `[redacted MAC]`; SW PKG6.6230.0725NAA
 - decryptPhrase → {"success":false} (b2bcmd semantics unresolved)
 
 ## Web-control stack state
@@ -413,3 +413,39 @@ interfaces extracted per-device, not redistributed). Results:
   /vendor/tmp/odm/b2b/b2bcmd.lock)
 - wifi PSK unmasking via other system-uid paths
 - webui error state prerequisite (hotel mode?)
+
+---
+
+# Round 14 (2026-11-13): MasterKey extracted → full offline BPK decryption
+
+## Chain
+
+1. Root-log trick (logcat carries `B2BCMD` stderr): our first decryptPhrase failed
+   with `decrypt_phrase_error: -5` — **a corrupted constant in our probe** (hand-copied
+   pubkey blob differed from ground truth at byte 451). Fixed programmatically; no more
+   hand-copying crypto material.
+2. Rebuilt probe against platform-34 (android-34-ext11 jar + build-tools r34, both now
+   in the analysis dir); targetSdk 29 (clears the "app is old" warning).
+3. `decryptPhrase("MasterKey", ENCRYPTED_PUBKEY)` → success → **RSA-2048 master public
+   key** (PEM, openssl-verified).
+4. Wrote `scripts/bpk_decrypt.py` (stdlib + openssl CLI): parses the EAIP header,
+   RSA-public-recovers the wrapped key (48 bytes = 32-byte AES key + 16-byte MD5),
+   verifies the body MD5, AES-256-CBC zero-IV decrypts to TGZ.
+5. **Decrypted `bravia-web-control-ui` 1.1.8+230** (7,532 files, 72MB): MD5 OK,
+   valid gzip, full source extracted.
+
+## Web-control UI internals (from decrypted source)
+
+- `app.js`: every route sits behind `hasAdminPassword` + `digestPassport.auth` —
+  **the error?code=1 state is "no admin password set"**. Set the B2B admin password
+  and the UI un-gates (then HTTP DIGEST auth).
+- Authenticated surface: `POST /sony/webui/api/ircc`, `ALL /api/firmwareupdate/:method/:id`,
+  `ALL /api/import` (settings import, chunk-upload-storage), `ALL /api/export`,
+  `POST /api/androidbridge/:service/:method` (**generic Android-side forwarding proxy**),
+  GraphQL at `/api/graphql`, webapi + IRCC proxies.
+- The androidbridge proxy → `webappservice` (uid 1000) — the web shell skeleton.
+
+## Next
+
+Set the admin password (B2B flow / ProSettingsService `setFeatures`), digest-auth to
+the webui, then audit `/api/androidbridge` + `/api/import` for write primitives.
