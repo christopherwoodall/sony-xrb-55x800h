@@ -1036,3 +1036,38 @@ both uninstalls. cleanupFwWrite cleared the staged upgrade package.
 - Node services: webui (20338) + bravia-updater (20343) only
 - Uninstalled via network: crestronconnected, remote_firmware_update_service
 - Staged upgrade package: cleared (cleanupFwWrite)
+
+---
+
+# Round 23 (2026-11-14): Debloat round 5 — post-campaign cleanup
+
+## The restart-loop fix (recap)
+
+- crestronconnected + remote_firmware_update_service uninstalled via the
+  updater API during boot windows (no adb needed)
+- bravia-updater uninstalled the same way — :20343 closed
+- Staged upgrade package cleared (cleanupFwWrite)
+- TV stable: single node service (webui, 20338 localhost-only)
+
+## Current state
+
+| Port | Service | Auth | Status |
+|------|---------|------|--------|
+| 80 | nginx + Sony JSON-RPC | token (mintable via webui) | UP |
+| 20338 | bravia-web-control-ui (localhost) | digest `1234abcd` | UP |
+| 20335/20341/20343 | research BPKs | — | CLOSED (uninstalled) |
+
+- 47 packages disabled (debloat list intact + 2 re-disabled:
+  b2b.vendorprotocol, promos — they had come back enabled)
+- Stock Google launcher active (tvlaunchercustomizer/tvx/sonyselect
+  disabled — the original campaign goal, still holding)
+- B2B dependency packages still ENABLED (webui deps):
+  hotelmode, importexport, adminpassword, prosettings
+
+## Pending decisions (operator)
+
+1. **webui (20338)**: keep as control interface, or uninstall the
+   bravia-web-control-ui BPK?
+2. **Admin password `1234abcd`**: standing note says remove at completion.
+   Removing it re-gates the webui (error?code=1) and closes our access.
+3. **B2B deps**: disable the 4 packages if the webui goes.
