@@ -266,3 +266,43 @@ platform-tools/        linux-x86_64 adb bundled by round 1 (macOS users: use
 Local-only (never committed): `~/sony-xrb-55x800h-analysis/` — 2.1GB artifact cache
 (APKs, modules, init rcs, kernel evidence, bugreport), `HUNT.md` campaign log,
 decompiled trees, audit tooling. See its `README.md`.
+
+---
+
+# Round 10 (2026-11-13): the USB BPK chain — full map, hardware test pending
+
+**Operator offers physical USB access; "walk the usb path and reenable those services".**
+
+## The chain (all verified in decompiled code, not yet on hardware)
+
+1. USB volume with `extapp_installer.pkg` at root → MTK DeviceManager real mount →
+   `usbmsgservice` (uid 1000) broadcasts `IsExistNodeInstallerFile=true` + mount path.
+2. `com.sony.dtv.b2b.noderuntime.privilege` `UsbDetector` (uid 10033, system priv-app):
+   the single-BPK branch **skips the pincode dialog and the hotel-mode autorun gate**
+   (both apply only to the multi-package scan path).
+3. `AppInstallerUtil.isBpkPkgFile()` = **8-byte magic check only**
+   (`EAIP\x00\x00\x01\x00`) — no signature, no checksum, no certificate.
+4. `NodeRuntimeService` installs + launches the BPK as uid 10033, which holds
+   WRITE_SECURE_SETTINGS, MASTER_CLEAR, REBOOT, INTERACT_ACROSS_USERS_FULL,
+   MANAGE_USERS, WRITE_MEDIA_STORAGE, REQUEST_INSTALL/DELETE_PACKAGES,
+   CAPTURE_VIDEO_OUTPUT, KILL_BACKGROUND_PROCESSES — and ships JNA/javacpp/
+   commons-compress for native reach.
+5. BPK body = installer JSON with a literal `cmd` key, `installation`, `options`
+   (forcereboot, avoid_interruption), `meta` — format reconstruction in progress.
+
+Second chain on the same stick: `Bravia*HotelSettings.dat` → ImportExport (uid 1000,
+system) → HotelSettings provider writes.
+
+## Closed this round
+
+- nginx reverseproxy: `setprop vendor.svp.reverseproxy.enable` is SELinux-denied to
+  shell; nginx not running; 2026 CVE set (15176 alias+rewrite heap overflow et al.)
+  dormant unless the reverseproxy is ever started by Sony features.
+
+## Next (hardware phase)
+
+1. Reconstruct exact BPK body format from `loadInstallerInfo*` + `NodeRuntimeService`.
+2. `pm enable` the noderuntime packages (reversible).
+3. Operator plugs in USB → stage BPK via adb onto the stick → observe install/launch
+   in logcat → verify uid + capabilities of the running node app.
+4. Rollback: `pm disable` again, remove USB files.
