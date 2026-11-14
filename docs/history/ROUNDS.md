@@ -449,3 +449,59 @@ interfaces extracted per-device, not redistributed). Results:
 
 Set the admin password (B2B flow / ProSettingsService `setFeatures`), digest-auth to
 the webui, then audit `/api/androidbridge` + `/api/import` for write primitives.
+
+---
+
+# Round 15 (2026-11-13): webui un-gated — full TV control API online
+
+Operator set the B2B admin password via the on-screen PasswordActivity (temp:
+`1234abcd`; **operator wants it removed once the campaign completes**).
+
+## What unlocked
+
+1. **Digest auth works**: `curl --digest -u admin:<pw> http://<tv>:<sony/webui>/*`
+   → 200 on all routes. The webui Express app is fully accessible.
+2. **`/api/androidbridge/:service/:method`** — the generic bridge proxy works.
+   `system/getSystemInformation` returned the full device dossier:
+   model, serial, panel, node version, IMportExport version, device ID.
+3. **`system/generateWebApiAuthToken`** → `{"token":"CAC639DFBBFCC35142D81CE2D47E5D98AE141EA0"}`
+   — a **webApiToken** minted on demand, no PIN, no rate limit observed.
+4. **With the token**, the full Sony JSON-RPC API on port 80 responds:
+   - `getSystemInformation` → full device info
+   - `getPowerStatus` → active
+   - `getApplicationList` → every installed app with launch URIs
+   - `getRemoteControllerInfo` → every remote button code (IRCC codes)
+   - **`/sony/ircc` (SOAP)** → sent a HOME button press — **200 OK**
+     (the TV physically received a remote-control command via our HTTP call)
+
+## Architecture (complete, verified)
+
+```
+nginx :80 (root, uid 2900)
+  └─ /sony/webui/ → Express (uid 10033, node app)
+       └─ digest auth (admin password, AndroidKeyStore TEE-backed)
+            └─ /api/androidbridge/:service/:method
+                 └─ bridge socket (privilege.sock, no auth of its own)
+                      └─ Java platform classes (uid 10033)
+                           ├─ system.*    → system info, token minting
+                           ├─ settings.*  → import/export, pro mode
+                           ├─ android.*   → package management
+                           └─ mode.*      → pro/hotel mode switching
+  └─ /sony/* (JSON-RPC + SOAP IRCC) ← x-application-token header
+```
+
+## Security assessment
+
+- The webui password is stored TEE-encrypted (AndroidKeyStore AES-GCM).
+- Once authenticated, `generateWebApiAuthToken` mints unlimited tokens.
+- The IRCC endpoint accepts raw button codes (full remote-control from HTTP).
+- The androidbridge proxy exposes service/method dispatch with no per-call
+  authorization beyond the initial digest auth.
+
+## Password removal (post-campaign)
+
+- Clear via PasswordActivity on the TV (Settings → B2B → Admin Password → clear),
+  or: `pm disable com.sony.dtv.b2b.adminpassword` (password persists in keystore
+  but the auth service stops responding → webui returns to error?code=1).
+- Full removal: factory reset the B2B admin password data via
+  `pm clear com.sony.dtv.b2b.adminpassword`.
