@@ -1071,3 +1071,49 @@ both uninstalls. cleanupFwWrite cleared the staged upgrade package.
 2. **Admin password `1234abcd`**: standing note says remove at completion.
    Removing it re-gates the webui (error?code=1) and closes our access.
 3. **B2B deps**: disable the 4 packages if the webui goes.
+
+---
+
+# Round 24 (2026-11-14): Tracking/telemetry sweep + campaign close-out
+
+## Tracking sweep
+
+Found still-enabled and disabled:
+
+```
+pm disable-user --user 0 com.sonyericsson.idd.agent        # Sony IDD (Internet Device Data) agent
+pm disable-user --user 0 com.sony.dtv.seeds.auth           # SEEDS data-platform auth
+```
+
+Full disabled tracking set (9): IDD agent, SEEDS auth, SEEDS iot,
+SEEDS remotestart, privacy-policy, Sony Select, user-context, smarthelp,
+bivlinfo. Total disabled packages: **49**.
+
+## Verified still-intact after all the reboot cycles
+
+- Mic lockdown: zero packages hold RECORD_AUDIO (appops query empty)
+- Debloat list: 47→49 disabled (vendorprotocol + promos re-disabled in round 23)
+- Stock Google launcher active
+- Private DNS: off (Paramount+ tradeoff), AdGuard specifier preserved
+- No Sony telemetry toggles in the standard settings providers — the package
+  disable is the effective kill
+
+## Restart-loop incident: cause confirmed, fixed network-only
+
+The loop after the crestron BPK install was the crestron node service
+crash-looping against a nonexistent processor + 4 concurrent node services.
+The fix was executed entirely over the network (the updater API survives boot
+windows): poll-and-fire uninstallPackage for crestronconnected,
+remote_firmware_update_service, and bravia-updater (which had resurrected
+itself from node_services after the first uninstall — re-fired).
+Final: one node service (webui, 127.0.0.1:20338), 0 FATAL / 0 ANR,
+boot reason = remote power key only.
+
+## Campaign close-out
+
+- 24 rounds: debloat → mic lockdown → root hunt → USB BPK chain → webui →
+  zip-slip → network BPK deployment → validator fingerprint → cleanup
+- Root: not achieved; every wall mapped and documented (FINDINGS + OPERATIONS)
+- The TV: stock-Android-TV home, mic-dark, telemetry-dark, stable,
+  one localhost-only control surface remaining (digest-gated)
+- OPERATIONS.md updated to the final state with full revert commands
