@@ -268,3 +268,43 @@ circle. App auto-updated to v17.4.0 the same evening (18:37).
   (basic/linux_rootfs/3rd_ro partitions — outside Android's namespace, per the
   fastboot partition table research in round 3). Google Assistant hotword models, if
   present, live in GMS private data (unreadable without root).
+
+---
+
+# Round 6 (2026-11-13): total microphone lockdown
+
+**Operator request: "total mic lockdown/removal."**
+
+## Pre-state
+
+- 6 apps held RECORD_AUDIO: Play Store, YouTube, Disney+, Google Videos (disabled
+  since July), katniss (disabled since July), Gboard.
+- Last actual mic use per appops history: YouTube ~245 days ago (557 ms), Play Store
+  ~762 days ago — pre-July voice-search remnants. Nothing since.
+- No microphone input device registered in the audio service: the X800H has no
+  far-field mic in the TV body; the remote is push-to-talk and its consumers have
+  been disabled since round 2.
+
+## Changes
+
+1. `pm revoke <pkg> android.permission.RECORD_AUDIO` — all holders except
+   `com.google.android.inputmethod.latin` (active-IME grants are re-granted by
+   system policy; revoke silently fails).
+2. `pm disable-user --user 0 com.sony.dtv.acousticautocalibration` — only remaining
+   Sony package that touches a mic.
+3. `appops set <pkg> RECORD_AUDIO deny` for **all 204 packages** — the enforcement
+   layer; fails the mic closed even for Gboard (grant present, op denied = no data)
+   and for any future grant.
+
+## Verification
+
+- dumpsys: only inputmethod.latin shows granted=true (IME policy artifact); its
+  appops = deny, as for every package.
+- Mic button on the remote: dead (voice stack disabled since round 2).
+
+## Reversal
+
+`adb shell appops reset`; re-grant per app with
+`adb shell pm grant <pkg> android.permission.RECORD_AUDIO`;
+`adb shell pm enable com.sony.dtv.acousticautocalibration`.
+Details: `backups/mic-lockdown-20261113.txt`.

@@ -1,0 +1,34 @@
+# Mic lockdown — 2026-11-13 (XBR-55X800H)
+
+## Found
+Holders of android.permission.RECORD_AUDIO (granted=true) before lockdown:
+- com.android.vending            (Play Store)
+- com.google.android.youtube.tv   (YouTube)
+- com.disney.disneyplus           (Disney+)
+- com.google.android.videos       (Google Videos, disabled since July)
+- com.google.android.katniss      (Google search, disabled since July)
+- com.google.android.inputmethod.latin (Gboard, active IME)
+
+Last actual mic usage (appops history): YouTube ~245 days ago (557ms),
+Play Store ~762 days ago — voice-search remnants from before the July round-2
+voice-stack teardown. No mic input device registered in dumpsys audio
+(no far-field mic in the TV body; remote is push-to-talk only and its
+consumers — katniss, tv.assistant, assistantadapter, voicerecognitionconfirmation —
+have been disabled since 2026-07-23).
+
+## Actions
+1. pm revoke <pkg> android.permission.RECORD_AUDIO  → all holders above
+   EXCEPT inputmethod.latin (active-IME grants are system-policy-fixed).
+2. pm disable-user --user 0 com.sony.dtv.acousticautocalibration
+3. appops set <pkg> RECORD_AUDIO deny  →  ALL 204 packages on the device
+   (fail-closed at the enforcement layer; covers Gboard and any future grant).
+
+## Verified
+- dumpsys: only inputmethod.latin still shows granted=true (IME policy);
+  its appops shows "RECORD_AUDIO: deny" like every other package.
+- Spot checks across system + user packages: deny everywhere.
+
+## Reversal
+adb shell appops reset
+adb shell pm grant <pkg> android.permission.RECORD_AUDIO   # per app, if desired
+adb shell pm enable com.sony.dtv.acousticautocalibration
