@@ -308,3 +308,69 @@ circle. App auto-updated to v17.4.0 the same evening (18:37).
 `adb shell pm grant <pkg> android.permission.RECORD_AUDIO`;
 `adb shell pm enable com.sony.dtv.acousticautocalibration`.
 Details: `backups/mic-lockdown-20261113.txt`.
+
+---
+
+# Round 7 (2026-11-13): privilege-escalation attack-surface audit (root hunt)
+
+**Operator request: "see if we can't get root — any badly permissioned Sony apps?"**
+Method: read-only (no disruption to running playback). Artifacts kept OUT of this public
+repo (Sony code): `~/sony-xrb-55x800h-analysis/` (11 pulled APKs, dexdumps, tooling).
+
+## Platform facts
+
+- Kernel 4.19.75, armv8l (32-bit userland), SELinux **Enforcing**.
+- **Zero setuid/setgid binaries** in /system /vendor /odm.
+- /system, /vendor on read-only dm-verity partitions; /cache denied to shell.
+- TV-OS bridge sockets (/data/vendor/tmp/{DTVService,dtv_svc_application_ipc,DFBInput,
+  MTKRMService,WAKELOCK_PROXY}) exist but DAC+SELinux deny the shell domain.
+- `update_engine` runs as root (PID 2648) — A/B payload applier.
+
+## Census
+
+- 38 packages run as uid 1000 (android.uid.system).
+- Manifest audit (aapt xmltree, custom parser) of 11 enabled system-uid Sony/MTK apps:
+  35 exported components with NO manifest permission guard. Entry actions dumped.
+
+## Top lead and its death: the OTA bridge
+
+`com.sony.dtv.update` (system uid) exposes unguarded exported service
+`.UpdateSessionManagerService` — AIDL `IUpdateSessionManagerService` with
+acquireLock/offerPayload/resumeUpdate/suspendUpdate/cancelUpdate/resetStatus.
+Bytecode shows every method is CALLERGATED in code:
+`SignatureVerifier.hasValidSignature(context, Binder.getCallingUid())` against four
+pinned SHA-256 signer certs:
+
+```
+72BFC06FB580E5ED94BC34434D26B350AF7A14AC1761E35C38D041CF9938956F
+D1EE28517D6950E5044E07B6F72732F094CD16F877BD173C524F85AC5AD4E4F5
+C8A2E9BCCF597C2FB6DC66BEE293FC13F2FC47EC77BC6B2B0D52C11F51192AB8
+22778FA17B54FABD5B9B6ADD812F1B4D82D4E00029894F3446514D28E713C938
+```
+
+("abort, caller package does not have a valid signature.") Manifest-unguarded but
+code-guarded. Even a direct IUpdateEngine bind still requires a Sony-signed payload
+(engine verifies payload signatures against the embedded OTA public key).
+Bonus recon from strings: "is M3 or elder ones. Useing http." — older generations
+download OTA over PLAIN HTTP (MITM path on M3-and-older models, not this set).
+
+## Other unguarded entry points (leads for a future session)
+
+- sonysystemservice.GlobalBroadcastReceiver — handles
+  `com.sony.dtv.usbmsgservice.MOUNT_UMOUNT_MSG` (mount/unmount relay as system uid;
+  callergate status unverified).
+- remotecontrolsettings InputKeyReceiver (GLOBAL_BUTTON) / MicKeyReceiver
+  (UNKNOWN_BUTTON) — key dispatch from system uid (no gain over adb's `input`).
+- idd.agent IDDBroadcastReceiver / IDDEnabledBroadcastReceiver (FORCE_UPLOAD etc.).
+- mtktvapi.agent MyIntentReceiver (`mtk.intent.rtctimer.set.bgm`) — unexamined.
+- Kernel 4.19.75 armv8l: years behind upstream; kernel LPE research is the most
+  plausible root path but is original exploit development.
+- Root native daemons worth auditing: airplayptp, sony_ko_wakelock_service,
+  precisiontime, crashlog, idds (binaries in /vendor/bin).
+
+## Verdict
+
+No badly-permissioned app hands out system uid tonight. No setuid to "copy over",
+verity + SELinux + signature gates hold. The audit artifacts and parser tooling are
+preserved in `~/sony-xrb-55x800h-analysis/` for a follow-up session (decompile the
+leads above with jadx when tooling allows).
