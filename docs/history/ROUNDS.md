@@ -526,8 +526,10 @@ nginx :80 (root, uid 2900)
    kills the process. Unrecoverable without reboot. (CWE-20: improper input
    validation on a privileged bridge method.)
 2. **setWebApiForwarding accepts external hosts** — potential SSRF/proxy
-   primitive (accepted `http://10.0.0.14:9999/` but untested for actual
-   forwarding since nginx died before we could verify).
+   primitive (accepted `http://10.0.0.14:9999/`). **UNVERIFIED**: a listener
+   on 10.0.0.14:9999 received no connection — nginx died (from the file://
+   rule submitted in the same batch) before it could reload the config.
+   Retest post-reboot with ONLY the external-host rule (no file://).
 3. **Bridge service map (verified live)**:
    - `system/getSystemInformation` — full device dossier
    - `system/hasAdminPassword` — gate check
