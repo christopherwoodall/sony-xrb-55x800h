@@ -416,3 +416,26 @@ grab drivers, get docs straight, then LinPEAS-style kernel CVE work.
 - dmesg (klogctl) and /proc/kallsyms denied to shell; no world-writable module params.
 - Full kernel config cached — triage of risky/hardening options happens against
   `kernel/config-4.19.75`.
+
+---
+
+# Round 9 (2026-11-13): artifact exploitation hunt
+
+Full campaign log: `~/sony-xrb-55x800h-analysis/HUNT.md` (local). Highlights:
+
+- **Confused-deputy door (live, unverified ceiling)**: sonysystemservice's unguarded
+  GlobalBroadcastReceiver forwards arbitrary intents into the guarded OwnerService
+  (system uid) → IntentDeliverer + module stack. Per-module extras audit pending.
+- **Dual-OS boundary mapped**: TV-OS mounts (linux_rootfs/3rd/recipe/perm/fdata) exist
+  in Android's namespace, all SELinux-denied to shell; /data/vendor/tmp is the shared
+  staging ground (root chmod 777 at boot, sockets inside, type-blocked to shell).
+- **adb bugreport = root data stream**: 18.7MB root dumpstate cached locally (kernel
+  cmdline with full partition/enc map + builtinmic=0 hardware confirmation, kernel log,
+  iptables, EBPF stats, PRINTENV, SMAPS-of-all-processes). dumpstate binary exec-blocked
+  for shell; binder path works.
+- **Trusty TEE + RPMB** present (storageproxyd); trusty_version denied even to root
+  dumpstate. **Root nginx** ("reverseproxy") on property trigger.
+- **Private keys are build-redacted**: "[REDACTED PRIVATE KEY]" placeholders in
+  IddAgent/OtaUrlProvisioning DEXes. Static secret hunt: clean.
+- usbmsgservice fake-USB chain mapped end-to-end and closed (see HUNT.md dead ends).
+- Mali r21p0 identified; kernel triage at KERNEL_TRIAGE.md (round 8).
