@@ -969,3 +969,70 @@ POST /sony/updater updateFirmware {url, dryRunMode}
 3. **Kernel driver audit**: 18 cached .ko files; SELinux gates device access.
 4. **TV-OS package format research**: upgrade_pkg_b2b.zip format unknown —
    if it's not the firmware PKG but a lighter B2B format, validation may differ.
+
+---
+
+# Round 22 (2026-11-14): TV stabilization + validator fully fingerprinted
+
+## Incident: restart loop after crestron BPK install
+
+The TV entered a reboot loop after the crestronconnected BPK install
+(4th node service). Root cause (probable): the crestron node service
+crash-looping trying to reach a nonexistent Crestron processor (TLS/CIP
+connect-retry) + resource pressure from 4 concurrent node services.
+
+**Fix (network-driven, no adb needed during the loop):** the updater API
+survives boot windows — poll-and-fire uninstallPackage for
+crestronconnected + remote_firmware_update_service. TV stabilized after
+both uninstalls. cleanupFwWrite cleared the staged upgrade package.
+
+## Path #2 COMPLETE: ProSettingsService full enumeration (113 methods)
+
+- `processRequestSync/processRequest`: NodeRuntime-only (uid 10033/10049
+  checked by package name). Our APK locked out.
+- The generic dispatcher has ONE service (system) with ONE method
+  (prepareFwWrite) — gated by GV.BEFORE_TREBLE (false on this device). Dead.
+- `installLogo(String)`: content:// URI → fixed destination
+  (BOOTANIMATION_ZIP_PATH). Content-controlled, destination-fixed,
+  boot animation only. Not a root path.
+- Other setters (setIPControl ✓ works, setWirelessSetting, setNetworkSetting,
+  setSystemSetting, setFeatures, setStartupUrl, setCustomLabels,
+  setScreenOverlay, app package state control, clearAllAccount,
+  clearApplicationUserData): all uid-1000-side config, no code exec.
+
+## Path #3 COMPLETE: TV-OS validator fully fingerprinted (via the dryRunMode=1 oracle)
+
+**The validation pipeline for /data/upgrade/upgrade_pkg_b2b.zip:**
+
+```
+1. File must exist (startFwUpdate checks getPackagePath())
+2. PayloadInformation.getPayloadInfoFromFile("file://" + path)
+   → ZipParserFile: valid ZIP + META-INF/com/android/metadata
+     + payload.bin + payload_properties.txt (standard Android A/B OTA!)
+   → version parsed from metadata: MUST have prefix "PKG" or "sony_dtv"
+     (PKG{b}.{r}.{d}.{ma}.{mi}.{rev}.{fv}.{bcast4}{REGION}{fn}
+      sony_dtv{8}{12hex}_{8hex}_{14digits})
+3. isValidTarget → fail = code 2 "Package is not valid"
+4. isNewerThanRunningVersion → ANTI-ROLLBACK, client-side
+   → fail = code 3 "Current version is newer"
+   (running: 0FA70A0BA0AB_00004300_16062301000725 ≙ PKG6.6230.0725NAA)
+5. dryRunMode 0 → mManager.offerPayload() → UpdateSessionManagerService
+   → payload signature verified in the A/B update engine (Sony OTA key)
+6. dryRunMode 2 (full) = DUMMY: fake progress simulation, no validation
+   ("!!!!!!!!!!!! DUMMY OFFERPAYLOAD !!!!!!!!!!!!")
+```
+
+- **dryRunMode=1 is a safe validation oracle** (real checks, never applies);
+  the verdict surfaces in getPackageUpdateStatus error detail
+  ("AB Update offerPayload fail. code: N")
+- SignatureVerifier in the update app = CALLER whitelist (4 Sony app certs,
+  uid 1000 auto-pass), not the payload check
+- **Conclusion: forged/staged packages cannot pass the update-engine payload
+  signature. Downgrade blocked client-side (isNewerThanRunningVersion).
+  The firmware path is closed without a validly-signed Sony OTA package.**
+
+## Stability state after cleanup
+
+- Node services: webui (20338) + bravia-updater (20343) only
+- Uninstalled via network: crestronconnected, remote_firmware_update_service
+- Staged upgrade package: cleared (cleanupFwWrite)
