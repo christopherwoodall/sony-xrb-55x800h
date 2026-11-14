@@ -306,3 +306,54 @@ system) → HotelSettings provider writes.
 3. Operator plugs in USB → stage BPK via adb onto the stick → observe install/launch
    in logcat → verify uid + capabilities of the running node app.
 4. Rollback: `pm disable` again, remove USB files.
+
+---
+
+# Round 11 (2026-11-13): USB BPK chain — VERIFIED END-TO-END ON HARDWARE
+
+Operator plugged in a USB stick; the full chain was exercised with Sony's own
+`bravia-web-control-ui` BPK (extracted from the runtime APK's `assets/preinstall/`).
+
+## What happened (log-verified)
+
+1. Stick mounted (real MTK mount) → usbmsgservice broadcast `IsExistNodeInstallerFile=true`.
+2. NodeRuntimePrivilege UsbDetector fired; single-BPK path bypassed pincode + hotel gates.
+3. Three round-4-disabled dependencies had to be re-enabled as the chain demanded them
+   (each logged its absence): `prosettings` (supplies the RSA key via
+   `ProSettings.decryptPhrase`), `noderuntime.normal` (its PermissionActivity is the
+   forward target — its absence crashed the consent dialog in onCreate), `webapi.core`
+   (WebApiCoreService for platform tokens).
+4. Consent UI: `extapp_basic_installer3` Vewd web app (WebAppRuntimeActivity, uid 10002)
+   loaded, talking to the runtime's `AppInstallerBackendServer` on 127.0.0.1:20040/20041.
+   Operator confirmed "sony bravia web control ui 1.1.8 is ready to install" → OK.
+5. Install completed; `forcereboot` fired (TV rebooted itself).
+6. After reboot: **bravia-web-control-ui auto-launched** via BootReceiver →
+   `NodeProcessService0` (uid 10033) `execNodeAsSharedlib` of
+   `/data/user/0/com.sony.dtv.b2b.noderuntime.privilege/app/node_services/bravia-web-control-ui/index.js`.
+7. The platform started **nginx reverseproxy** (root → uid 2900) on **0.0.0.0:80**.
+
+## Resulting LAN exposure (verified by probe)
+
+- `POST /sony/avContent` (getCurrentExternalInputsStatus) → **200 with full input list,
+  NO authentication**.
+- `POST /sony/system` / `/sony/IRCC` → 403 + webauth flow (`auth_default` = LAN PIN,
+  `auth_tv` = localhost-trusted token issuance on 127.0.0.1:80).
+- Node stack internal listener 127.0.0.1:20338 (uid 10033).
+
+## Security assessment
+
+- **Chain proven**: physical USB + 8-byte magic (`EAIP\0\0\1\0`) → privileged node app
+  (uid 10033: WRITE_SECURE_SETTINGS, MASTER_CLEAR, REBOOT, INTERACT_ACROSS_USERS_FULL,
+  MANAGE_USERS, REQUEST_INSTALL_PACKAGES…) persistently auto-running at boot. The BPK
+  body is RSA-wrapped (Sony key needed to craft NEW packages) but ANY existing
+  legitimately-built BPK (hotel TVs, firmware dumps, the four in the runtime APK itself)
+  replays onto any consumer set with operator consent only.
+- **Current posture regression**: the web API surface (removed in round 4) is back and
+  partially unauthenticated on the LAN; node platform runs at boot.
+
+## Rollback (when desired)
+
+- `pm disable` noderuntime.{privilege,normal,extension} + prosettings + webapi.core →
+  node app stops, nginx goes away, API closes. BPK remains installed but inert.
+- Full removal of the installed app: the runtime's uninstaller
+  (`assets/autoUninstaller.pkg` — cached) or the install-record deletion flow.
