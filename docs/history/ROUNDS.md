@@ -370,3 +370,46 @@ Operator plugged in a USB stick; the full chain was exercised with Sony's own
   (was CLEANUP_REPORT.md — superseded as front document, preserved verbatim).
 - Current state (verified live): 49 packages disabled, 9 removed, mic lockdown,
   DNS blocking off, web stack running, ADB on 5555.
+
+---
+
+# Round 13 (2026-11-13): ProSettingsService — exported system admin API
+
+Operator pivots to root. Removed CLEANUP_REPORT.md (fully superseded by docs/).
+
+## Finding
+
+`com.sony.dtv.b2b.prosettings/.ProSettingsService` (uid 1000) is **exported and
+guarded only by `android.permission.WRITE_SECURE_SETTINGS`** — an adb-grantable
+development permission. Full admin interface: decryptPhrase (BPK MasterKey path),
+getConfiguredWifiNetworks, getIpControlPSK, installLogo/uninstallLogo, setHotelMode,
+setFeatures, enable/disableAppPackage, clearAllAccount, firmware-write flows,
+processRequestSync (JSON-RPC router — only service "system"/prepareFwWrite, dead
+post-Treble). decryptPhrase executes the native `/system/bin/b2bcmd decrypt_phrase`
+(shell-blocked binary) as uid 1000; the fallback packed pubkey in NodeRuntimePrivilege
+was build-stripped (`PACKED_PUBKEY = new int[0]`).
+
+## Probe (built + executed on hardware)
+
+`scripts/prosettings-probe/` — 20.8KB APK (Glass toolchain recipe; Sony AIDL
+interfaces extracted per-device, not redistributed). Results:
+- bind OK from an adb-installed untrusted app (pm grant WRITE_SECURE_SETTINGS)
+- wifi configs disclosed (SSIDs/WPA/MACs; PSKs masked by toString)
+- IpControlPSK empty; deviceId B0:00:08:F0:4F:C5; SW PKG6.6230.0725NAA
+- decryptPhrase → {"success":false} (b2bcmd semantics unresolved)
+
+## Web-control stack state
+
+- `/sony/webui/` (Nuxt SPA served by the node app, Express on 127.0.0.1:20338,
+  proxied via nginx :80) returns error?code=1 for all routes — app-internal
+  error state (suspect: hotel-mode configuration prerequisite).
+- `adb forward` = localhost client: auth_tv endpoint reachable, guide/
+  getSupportedApiInfo gated, accessControl/act → error 12.
+
+## Open leads
+
+- installLogo(String): candidate file-write primitive as uid 1000
+- b2bcmd decrypt_phrase semantics (why success:false; lock file at
+  /vendor/tmp/odm/b2b/b2bcmd.lock)
+- wifi PSK unmasking via other system-uid paths
+- webui error state prerequisite (hotel mode?)

@@ -13,3 +13,8 @@ sony-xrb-55x800h-analysis/
 *.odex
 *.vdex
 *.art
+# prosettings probe: Sony AIDL extracts + build artifacts stay local
+scripts/prosettings-probe/src/
+scripts/prosettings-probe/probe.keystore
+scripts/prosettings-probe/PSProbe.apk
+scripts/prosettings-probe/build/
