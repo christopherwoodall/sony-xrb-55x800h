@@ -804,3 +804,96 @@ Round 19: IP Control auth bypass + firmware service unlock
 - Firmware update DoS (corrupt the active request)
 - Data exfiltration channel (the TV fetches attacker-controlled URLs)
 - On hotel/enterprise networks: mass exploitation of all Bravia TVs
+
+---
+
+# Round 20 (2026-11-14): BPK analysis + firmware pipeline path planning
+
+## BPK analysis (all four decrypted, source-level)
+
+### crestronconnected v2.0.11
+- The `InstallAPK/CrestronConnected.apk` (com.sony.dtv.b2b.crestronsettings)
+- Just a UI shell (StartupActivity, LEANBACK_LAUNCHER) — NO special permissions
+- **NOT JUICY** — the node service part might be more interesting but the APK is benign
+
+### bravia-updater v1.3.4+995 (38MB)
+- **TWO variants**: `bravia-updater` (Android side) and `bravia-updater_UroO`
+- **The UroO variant runs on the TV-OS side:**
+  - `"user": "500"` — a completely different uid (TV-OS app user)
+  - `"arg": "/var/app/node_services/bravia-updater_UroO/index.js"` — TV-OS filesystem
+  - `"node_version": "v6.9.1"` — OLD node (2017!) on the TV-OS side
+- The `encript.js` module searches for key/cert files (SSL keys for the updater)
+- **JUICY**: the TV-OS side is the separate Linux system we've been unable to reach
+
+## The firmware update pipeline (complete source analysis)
+
+### Architecture
+```
+POST /firmware/api/v1/requests {"url": "...", "update": true/false}
+  → tvClient.prepareFwWrite()          [bridge → system service]
+  → returns socket_name                ["/data/upgrade/upgrade_pkg_b2b.zip"]
+  → Downloader(url, socket_name)        [downloads from ANY URL]
+  → reliableFileWriter OR b2bcmdFileWriter
+      ├── reliableFileWriter: writes to socket_name as a regular file
+      │   (used when isAbUpdate=true — Android 10 A/B updates)
+      └── b2bcmdFileWriter: connects to ABSTRACT UNIX socket
+          ├── abstractSocket.connect('\0' + socket_name)
+          ├── sends {"method": "PUT", "path": "/upgrade/upgrade_loader.pkg"}
+          ├── streams binary data (type 0x02 packets)
+          └── close (type 0x02, length 0)
+  → doUpdate() → tvClient.startFirmwareUpdate() → reboot()
+```
+
+### The b2bcmd protocol (root daemon)
+```
+Packet: [1B type][4B BE length][payload]
+  type 0x00 = JSON: {"method": "PUT"/"HEAD", "path": "..."}
+  type 0x02 = binary data / close (length 0)
+
+The PUT path is HARDCODED to /upgrade/upgrade_loader.pkg in the client.
+The abstract socket name comes from prepareFwWrite().
+```
+
+### The attack surface map
+
+| Write target | Method | Status |
+|---|---|---|
+| /storage/emulated/0/ (shared) | zip-slip | ✓ WORKS |
+| /storage/<USB>/ (USB mounts) | zip-slip | ✓ WORKS |
+| /data/user/0/<app>/ (app private) | zip-slip | ✗ SELinux blocks (cross-app) |
+| /data/system/ | zip-slip | ✗ SELinux blocks (system_data_file) |
+| /data/local/tmp/ | zip-slip | ✗ DAC blocks (root:shell 0771) |
+| /data/upgrade/ | reliableFileWriter | ? (node process context, uid 10033) |
+
+### The remaining barriers and paths to root
+
+**Path A: Code execution in a node process** (to speak b2bcmd protocol)
+- Need to inject JavaScript into the webui or firmware service
+- Zip-slip can't reach app data dirs (SELinux)
+- ChunkUploadStorage writes to /dev/null
+- Multer filename is hardcoded (import.zip)
+- **OPEN**: any other code injection vector in the webui?
+
+**Path B: The b2bcmd daemon directly**
+- The PUT path is hardcoded in the client
+- The abstract socket name comes from prepareFwWrite()
+- Need a way to speak the protocol with a controlled path
+- **OPEN**: can we connect to the abstract socket from shell?
+
+**Path C: The TV-OS side (bravia-updater UroO)**
+- Runs as uid 500 on /var/app/ — the separate Linux system
+- Node v6.9.1 (2017, MANY known vulns)
+- **OPEN**: install the UroO variant via BPK chain → code on TV-OS side
+
+**Path D: The node v6.9.1 on TV-OS (if we can install UroO)**
+- Node 6.9.1 is from 2017 — dozens of critical CVEs
+- Buffer overflow, RCE, etc. in that version
+- **OPEN**: what's the actual exposure?
+
+## SELinux assessment
+- `getenforce` → Enforcing
+- `setenforce 0` → Permission denied (shell can't)
+- Kernel cmdline has no `androidboot.selinux=permissive`
+- SELinux config is read-only (/sys/fs/selinux/)
+- **No known bypass from our current access level**
+- The ProSettingsService's setSystemProperty is firmware-gated (can't set SELinux props)
