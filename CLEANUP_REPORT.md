@@ -192,7 +192,8 @@ com.sony.dtv.remotecontrolsettings, com.sony.dtv.timers, com.sony.dtv.servicemod
 
 ## Root status (researched 2026-11-10)
 
-- No public root for US-retail XBR-55X800H (MT5895, Android 10). Sony ships locked TV
+- No public root for US-retail XBR-55X800H (MT5893, Android 10; platform per
+  `ro.board.platform`). Sony ships locked TV
   bootloaders and has no TV unlock program. Only documented Sony TV roots: Chinese-market
   variants (X8500G via fastboot unlock, XDA) and pre-2017 models via stale one-click-root
   bugs. Kernel exploits exist for other vendors' MTK TV sets (e.g. Xiaomi) but no public
@@ -217,3 +218,53 @@ com.sony.dtv.remotecontrolsettings, com.sony.dtv.timers, com.sony.dtv.servicemod
 - airplayapp/homekit: already re-installed by the firmware; `pm enable` re-activates.
 - Re-disabling vewd will RE-CREATE the AirPlay crash loop on this firmware — see above.
 - Full revert script: `./backups/restore.sh`.
+
+---
+
+# Round 5 (2026-11-13): Paramount+ infinite spinner — AdGuard DNS vs Conviva
+
+**Symptom:** Paramount+ (com.cbs.ott) main page loads; any playback = infinite loading
+circle. App auto-updated to v17.4.0 the same evening (18:37).
+
+## Root cause
+
+- AdGuard Private DNS (round 1) sinkholes `conviva.com` / `livepass.conviva.com` → 0.0.0.0.
+- The Paramount+ app gates stream start on Conviva (video QoE analytics) SDK init.
+  With the domain sinkholed, init fails instantly and silently → infinite retry loop.
+- Signature in logs: NO errors, NO DRM/CDN activity from com.cbs.ott, only heavy GC churn.
+  Connection table during spinner: Adobe Analytics (63.140.32.0/19) + Conviva sensor IPs
+  + Google GMS + Fastly — no video CDN, no Widevine license server.
+- Connection table during working playback (DNS off): Akamai (video CDN, rDNS-confirmed),
+  AWS/CloudFront, Fastly, Google, live Conviva sessions (162.247.241.4,
+  2620:10b:7001:11::149, livepass → 199.127.194.40 — Conviva sensor CIDRs
+  199.127.194.0/24, 162.247.224.0/20, 2620:10b:7000::/44).
+- A/B: AdGuard on → spinner (reproducible); off → plays. Scattered identical user reports
+  ("app loads but episodes spin") on status trackers the same day suggest v17.4.0 made
+  the Conviva init mandatory for ad-blocking households.
+
+## Resolution (operator decision 2026-11-13)
+
+- Private DNS left OFF on the TV for now:
+  `settings put global private_dns_mode off` (specifier `dns.adguard-dns.com` preserved).
+- Restore ad-blocking later: `settings put global private_dns_mode hostname`
+  (specifier still stored), or switch to a personal AdGuard/NextDNS server with an
+  `@@||conviva.com^` allowlist exception, or — once the operator's self-hosted server
+  exists — a LAN AdGuard Home with the same exception and the TV pointed at it via
+  static DNS.
+
+## Root / hosts-file check (verified 2026-11-13)
+
+- `adb root` → "adbd cannot run as root in production builds" (user build, ro.debuggable=0).
+- No su binary (system/bin, system/xbin, sbin).
+- `/system/etc/hosts` root-owned, `/vendor` on dm-verity device (`/dev/block/dm-1`, ro);
+  write test → "Read-only file system". Hosts-file ad-blocking requires root; no public
+  root for this set (see round 3).
+
+## On-device ML inventory (2026-11-13): negative
+
+- Platform `mt5893`; no APU/NPU props, no neural HALs, no tflite/onnx/mnn/nb model files
+  anywhere under /system /vendor /odm /product. 2020-era MediaTek TV SoC predates the
+  AI-PQ/AI-SR units of later chips; Sony's upscaling/PQ runs on the TV-OS side
+  (basic/linux_rootfs/3rd_ro partitions — outside Android's namespace, per the
+  fastboot partition table research in round 3). Google Assistant hotword models, if
+  present, live in GMS private data (unreadable without root).
